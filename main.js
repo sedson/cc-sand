@@ -5,8 +5,8 @@ const { min, max, round, random, floor, sin, cos, tan } = Math;
 
 
 // Settings for the world.
-const width = 80;
-const height = 80;
+const width = 100;
+const height = 100;
 const scale = 6;
 
 // Mouse state. Event handlers at bottom.
@@ -73,6 +73,8 @@ class World {
       new Uint8Array(this.width * this.height),
     ];
 
+    this.wroteThisFrame = new Uint8Array(this.width * this.height);
+
     this._readIndex = 0;
     this._writeIndex = 1;
   }
@@ -91,19 +93,28 @@ class World {
     return ((y + this.height) % this.height) * this.width + ((x + this.width) % this.width);
   }
 
-  read(x, y) {
+  read(x, y, checkDirty = false) {
     if (x < 0 || x >= this.width || y < 0 || y >= this.height) {
       return ['out_of_bounds', -1];
     }
     const ndx = this.xyToIndex(x, y);
-    const typeId = this.typesBuffers[this._readIndex][ndx];
-    const data = this.dataBuffers[this._readIndex][ndx];
+
+    let bufferId = this._readIndex;
+
+    if (checkDirty && this.wroteThisFrame[ndx]) {
+      bufferId = this._writeIndex;
+    }
+
+    const typeId = this.typesBuffers[bufferId][ndx];
+    const data = this.dataBuffers[bufferId][ndx];
     const type = this.types[typeId];
+
+
     if (type !== undefined) {
       return [type.name, data];
     } else {
       // console.log('Found unkown type:', typeId)
-      return ['unknown', 0]
+      return ['unknown', 0];
     }
   }
 
@@ -124,14 +135,18 @@ class World {
   }
 
   swap(x1, y1, x2, y2) {
-    this.write(x1, y1, ...this.read(x2, y2));
-    this.write(x2, y2, ...this.read(x1, y1));
+    const tmp = this.read(x1, y1);
+    this.write(x1, y1, ...this.read(x2, y2, true));
+    this.write(x2, y2, ...tmp);
   }
 
   swapOffsetIfType(x, y, dx, dy, type) {
-    let match = type.indexOf(this.read(x + dx, y + dy)[0]) > -1;
+    let match = type.indexOf(this.read(x + dx, y + dy, true)[0]) > -1;
     if (match) {
       this.swap(x, y, x + dx, y + dy);
+      this.markDirty(x + dx, y + dy);
+      this.markDirty(x, y);
+
     }
     return match;
   }
@@ -139,11 +154,21 @@ class World {
   flipBuffers() {
     this._readIndex = (this._readIndex + 1) % 2;
     this._writeIndex = (this._writeIndex + 1) % 2;
-
     for (let i = 0; i < this.width * this.height; i++) {
       this.typesBuffers[this._writeIndex][i] = 0;
       this.dataBuffers[this._writeIndex][i] = 0;
     }
+  }
+
+  clearDirty() {
+    for (let i = 0; i < this.width * this.height; i++) {
+      this.wroteThisFrame[i] = 0;
+    }
+  }
+
+  markDirty(x, y) {
+    const ndx = this.xyToIndex(x, y);
+    this.wroteThisFrame[ndx] = 1;
   }
 }
 
@@ -154,57 +179,44 @@ world.iterate((x, y) => {
 });
 world.iterate(draw);
 
-console.log(world);
-
-
-// let neighbor = (x, y, xoff, yoff) => {
-//   return readType(x + xoff, y + yoff);
-// }
-
-// const randomReflect = () => {
-//   return randArr([-1, 0, 1]);
-// }
-
-
-// const swapToOffsetIfType = (x, y, xoff, yoff, type) => {
-//   if (readType(x + xoff, y + yoff)?.name === type) {
-//     swap(x, y, x + xoff, y + yoff);
-//     return true;
-//   }
-//   return false;
-// }
 
 // Logic for one cell's update
 const update = (x, y, type, data) => {
+  if (world.wroteThisFrame[world.xyToIndex(x, y)]) {
+    return;
+  }
   elements[type].update(world, x, y, data);
 }
 
 function draw(x, y, type, data) {
-  const color = elements[type].color(data);
-  pixel(x, y, color);
+  pixel(x, y, elements[type].color(data));
 }
 
+let frame = 0;
+
 function loop() {
-  world.iterate(update);
+  requestAnimationFrame(loop);
+  frame += 1;
+  if ((frame % 4) !== 0) {
+    // return;
+  }
 
   if (mouse.down) {
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 20; i++) {
       let x = mouse.x + round(random() * 10 - 5);
       let y = mouse.y + round(random() * 10 - 5);
       world.write(x, y, selectedElem, floor(random() * 255));
+      world.markDirty(x, y);
     }
   }
 
-  world.flipBuffers();
+  world.iterate(update);
   world.iterate(draw);
-  requestAnimationFrame(loop);
+  world.clearDirty();
+  world.flipBuffers();
 }
 
-
-
 loop();
-
-
 
 canvas.addEventListener('mousedown', (e) => {
   mouse.down = true;
